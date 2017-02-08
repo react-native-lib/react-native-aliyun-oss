@@ -1,2 +1,5 @@
 
+android/build/
+*.xcuserdatad
+*.iml
 .idea
