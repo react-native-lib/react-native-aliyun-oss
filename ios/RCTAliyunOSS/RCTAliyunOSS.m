@@ -9,7 +9,7 @@
 #import "RCTAliyunOSS.h"
 #import "RCTLog.h"
 #import "OSSService.h"
-
+#import <Photos/Photos.h>
 
 @implementation RCTAliyunOSS{
     
@@ -120,13 +120,13 @@ RCT_REMAP_METHOD(downloadObjectAsync, bucketName:(NSString *)bucketName objectKe
     }];
 }
 
-//异步上传
-RCT_REMAP_METHOD(uploadObjectAsync, bucketName:(NSString *)BucketName
-                  SourceFile:(NSString *)SourceFile
-                  OssFile:(NSString *)OssFile
-                  UpdateDate:(NSString *)UpdateDate
-                  resolver:(RCTPromiseResolveBlock)resolve
-                  rejecter:(RCTPromiseRejectBlock)reject) {
+
+RCT_REMAP_METHOD(uploadDataAsync, bucketName:(NSString *)BucketName
+                SourceData:(NSData *)data
+                OssFile:(NSString *)OssFile
+                UpdateDate:(NSString *)UpdateDate
+                resolver:(RCTPromiseResolveBlock)resolve
+                rejecter:(RCTPromiseRejectBlock)reject) {
     
     OSSPutObjectRequest * put = [OSSPutObjectRequest new];
     
@@ -135,7 +135,92 @@ RCT_REMAP_METHOD(uploadObjectAsync, bucketName:(NSString *)BucketName
     put.objectKey = OssFile;
     //NSString * docDir = [self getDocumentDirectory];
     //put.uploadingFileURL = [NSURL fileURLWithPath:[docDir stringByAppendingPathComponent:@"file1m"]];
-    put.uploadingFileURL = [NSURL fileURLWithPath:SourceFile];
+    put.uploadingData = data;
+    // optional fields
+    put.uploadProgress = ^(int64_t bytesSent, int64_t totalByteSent, int64_t totalBytesExpectedToSend) {
+        NSLog(@"%lld, %lld, %lld", bytesSent, totalByteSent, totalBytesExpectedToSend);
+        [self sendEventWithName: @"uploadProgress" body:@{@"everySentSize":[NSString stringWithFormat:@"%lld",bytesSent],
+                                                          @"currentSize": [NSString stringWithFormat:@"%lld",totalByteSent],
+                                                          @"totalSize": [NSString stringWithFormat:@"%lld",totalBytesExpectedToSend]}];
+        
+    };
+    //put.contentType = @"";
+    //put.contentMd5 = @"";
+    //put.contentEncoding = @"";
+    //put.contentDisposition = @"";
+    put.objectMeta = [NSMutableDictionary dictionaryWithObjectsAndKeys: UpdateDate, @"Date", nil];
+    
+    OSSTask * putTask = [client putObject:put];
+    
+    [putTask continueWithBlock:^id(OSSTask *task) {
+        NSLog(@"objectKey: %@", put.objectKey);
+        if (!task.error) {
+            NSLog(@"upload object success!");
+            resolve(@YES);
+        } else {
+            NSLog(@"upload object failed, error: %@" , task.error);
+            reject(@"-1", @"not respond this method", nil);
+        }
+        return nil;
+    }];
+}
+
+//异步上传
+RCT_REMAP_METHOD(uploadObjectAsync, bucketName:(NSString *)BucketName
+                  SourceFile:(NSString *)SourceFile
+                  OssFile:(NSString *)OssFile
+                  UpdateDate:(NSString *)UpdateDate
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
+    
+    NSURL *uploadURL = [NSURL URLWithString:SourceFile];
+    NSLog(@"uploadURL.scheme %@", uploadURL.scheme);
+    if ([uploadURL.scheme caseInsensitiveCompare:@"assets-library"] == NSOrderedSame) {
+        PHFetchResult *results = [PHAsset fetchAssetsWithALAssetURLs:@[uploadURL] options:nil];
+        if (results.count == 0) {
+            NSString *errorText = [NSString stringWithFormat:@"Failed to fetch PHAsset with local identifier %@ with no error message.", SourceFile];
+            reject(@"-1", errorText, nil);
+            return;
+        }
+        
+        PHAsset *asset = [results firstObject];
+        PHImageRequestOptions *imageOptions = [PHImageRequestOptions new];
+        // Allow PhotoKit to fetch images from iCloud
+        imageOptions.networkAccessAllowed = NO;
+        // Note: PhotoKit defaults to a deliveryMode of PHImageRequestOptionsDeliveryModeOpportunistic
+        // which means it may call back multiple times - we probably don't want that
+        imageOptions.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+        CGSize  targetSize = PHImageManagerMaximumSize;
+        imageOptions.resizeMode = PHImageRequestOptionsResizeModeNone;
+        
+        PHImageRequestID requestID =
+        [[PHImageManager defaultManager] requestImageForAsset:asset
+                                                   targetSize:PHImageManagerMaximumSize
+                                                  contentMode:PHImageContentModeDefault
+                                                      options:imageOptions
+                                                resultHandler:^(UIImage *result, NSDictionary<NSString *, id> *info) {
+                                                    if (result) {
+                                                        NSData *imageData = UIImageJPEGRepresentation(result, 0.8);
+                                                        [self bucketName:BucketName SourceData:imageData OssFile:OssFile UpdateDate:UpdateDate resolver:resolve rejecter:reject];
+                                                        
+                                                    } else {
+                                                        NSString *errorText = info[PHImageErrorKey];
+                                                        reject(@"-1", errorText, nil);
+                                                    }
+                                                }];
+        
+        
+        return;
+    }
+    
+    OSSPutObjectRequest * put = [OSSPutObjectRequest new];
+    
+    // required fields
+    put.bucketName = BucketName;
+    put.objectKey = OssFile;
+    //NSString * docDir = [self getDocumentDirectory];
+    //put.uploadingFileURL = [NSURL fileURLWithPath:[docDir stringByAppendingPathComponent:@"file1m"]];
+    put.uploadingFileURL = uploadURL;
     NSLog(@"uploadingFileURL: %@", put.uploadingFileURL);
     // optional fields
     put.uploadProgress = ^(int64_t bytesSent, int64_t totalByteSent, int64_t totalBytesExpectedToSend) {
