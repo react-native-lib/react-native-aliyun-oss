@@ -30,14 +30,21 @@ import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.String;
 
+import android.database.Cursor;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Environment;
+import android.provider.MediaStore;
+import android.support.v4.content.CursorLoader;
 import android.util.Log;
 
 /**
@@ -105,12 +112,116 @@ public class aliyunossModule extends ReactContextBaseJavaModule {
         Log.d("AliyunOSS", "OSS initWithSigner ok!");
     }
 
+    public static byte[] File2byte(String filePath)
+    {
+        byte[] buffer = null;
+        try
+        {
+            File file = new File(filePath);
+            FileInputStream fis = new FileInputStream(file);
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] b = new byte[1024];
+            int n;
+            while ((n = fis.read(b)) != -1)
+            {
+                bos.write(b, 0, n);
+            }
+            fis.close();
+            bos.close();
+            buffer = bos.toByteArray();
+        }
+        catch (FileNotFoundException e)
+        {
+            e.printStackTrace();
+        }
+        catch (IOException e)
+        {
+            e.printStackTrace();
+        }
+        return buffer;
+    }
+
+
+    public void uploadDataAsync(String bucketName, byte[] sourceData, String ossFile, String updateDate, final Promise promise) {
+
+        PutObjectRequest put = new PutObjectRequest(bucketName, ossFile, sourceData);
+        ObjectMetadata metadata = new ObjectMetadata();
+        metadata.setContentType("application/octet-stream");
+        put.setMetadata(metadata);
+
+        // 异步上传时可以设置进度回调
+        put.setProgressCallback(new OSSProgressCallback<PutObjectRequest>() {
+            @Override
+            public void onProgress(PutObjectRequest request, long currentSize, long totalSize) {
+                Log.d("PutObject", "currentSize: " + currentSize + " totalSize: " + totalSize);
+                String str_currentSize = Long.toString(currentSize);
+                String str_totalSize = Long.toString(totalSize);
+                WritableMap onProgressValueData = Arguments.createMap();
+                onProgressValueData.putString("currentSize", str_currentSize);
+                onProgressValueData.putString("totalSize", str_totalSize);
+                getReactApplicationContext().getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter.class)
+                        .emit("uploadProgress", onProgressValueData);
+            }
+        });
+
+        OSSAsyncTask task = oss.asyncPutObject(put, new OSSCompletedCallback<PutObjectRequest, PutObjectResult>() {
+            @Override
+            public void onSuccess(PutObjectRequest request, PutObjectResult result) {
+                Log.d("PutObject", "UploadSuccess");
+                Log.d("ETag", result.getETag());
+                Log.d("RequestId", result.getRequestId());
+                promise.resolve("UploadSuccess");
+            }
+
+            @Override
+            public void onFailure(PutObjectRequest request, ClientException clientExcepion, ServiceException serviceException) {
+                // 请求异常
+                if (clientExcepion != null) {
+                    // 本地异常如网络异常等
+                    clientExcepion.printStackTrace();
+                }
+                if (serviceException != null) {
+                    // 服务异常
+                    Log.e("ErrorCode", serviceException.getErrorCode());
+                    Log.e("RequestId", serviceException.getRequestId());
+                    Log.e("HostId", serviceException.getHostId());
+                    Log.e("RawMessage", serviceException.getRawMessage());
+                }
+                promise.reject("UploadFaile", "message:123123");
+            }
+        });
+        Log.d("AliyunOSS", "OSS uploadObjectAsync ok!");
+    }
+
     @ReactMethod
     public void uploadObjectAsync(String bucketName, String sourceFile, String ossFile, String updateDate, final Promise promise) {
         // 构造上传请求
-        if (sourceFile != null) {
-            sourceFile = sourceFile.replace("file://", "");
+        if (sourceFile == null) {
+            promise.reject("UploadFaile", "文件不存在");
+            return;
         }
+        sourceFile = sourceFile.replace("file://", "");
+        if(sourceFile.contains("content://")){
+            Uri uri = Uri.parse(sourceFile);
+            CursorLoader cursorLoader = new CursorLoader(getReactApplicationContext(),
+                    uri, null, null, null, null);
+            Cursor cursor2 = cursorLoader.loadInBackground();
+            if (cursor2 != null) {
+                Log.d("AliyunOSS", "记录数="+cursor2.getCount());
+                if (cursor2.moveToFirst()) {
+                    int index = cursor2.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+                    String path = cursor2.getString(index);
+                    Log.d("AliyunOSS", "path="+path);
+                    byte[] data = File2byte(path);
+                    uploadDataAsync(bucketName, data, ossFile, updateDate, promise);
+                }
+                cursor2.close();
+            }else {
+                promise.reject("UploadFaile", "获取图片数据失败");
+            }
+            return;
+        }
+
         PutObjectRequest put = new PutObjectRequest(bucketName, ossFile, sourceFile);
         ObjectMetadata metadata = new ObjectMetadata();
         metadata.setContentType("application/octet-stream");
