@@ -175,7 +175,7 @@ RCT_REMAP_METHOD(uploadObjectAsync, bucketName:(NSString *)BucketName
     
     NSURL *uploadURL = [NSURL URLWithString:SourceFile];
     NSLog(@"uploadURL.scheme %@", uploadURL.scheme);
-    if ([uploadURL.scheme caseInsensitiveCompare:@"assets-library"] == NSOrderedSame) {
+    if (uploadURL.scheme != nil && [uploadURL.scheme caseInsensitiveCompare:@"assets-library"] == NSOrderedSame) {
         PHFetchResult *results = [PHAsset fetchAssetsWithALAssetURLs:@[uploadURL] options:nil];
         if (results.count == 0) {
             NSString *errorText = [NSString stringWithFormat:@"Failed to fetch PHAsset with local identifier %@ with no error message.", SourceFile];
